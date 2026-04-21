@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import logging
 import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
 import tantivy
 
-from tantivy_search.chunking import SUPPORTED_EXTENSIONS, Chunk, chunk_file
+if TYPE_CHECKING:
+    from tantivy_search.chunking import Chunk
 
 from tantivy_search.config import (
     INDEX_DIR,
@@ -141,6 +146,8 @@ class SearchIndex:
 
     def index_repo(self, repo_path: str, repo_name: str) -> IndexStats:
         """Delete all existing docs for repo, then re-chunk and re-index all files."""
+        from tantivy_search.chunking import chunk_file
+
         start = time.time()
         stats = IndexStats()
 
@@ -171,6 +178,8 @@ def is_skippable_dir(name: str) -> bool:
 
 def _collect_supported_files(root: Path) -> list[Path]:
     """Walk directory tree, return sorted list of files with supported extensions."""
+    from tantivy_search.chunking import SUPPORTED_EXTENSIONS
+
     files: list[Path] = []
     if not root.is_dir():
         return files
