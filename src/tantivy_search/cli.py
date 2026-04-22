@@ -49,7 +49,7 @@ def main() -> None:
         "--repo",
         type=str,
         default=None,
-        help="Filter by repository name (e.g. conversation-history, myrepo)",
+        help="Filter by repository name(s), comma-separated (e.g. myrepo or repo1,repo2)",
     )
     parser.add_argument(
         "-l",

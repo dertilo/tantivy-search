@@ -53,6 +53,12 @@ def test_parse_repo_short_alias():
     assert parsed.repo_filter == "myrepo"
 
 
+def test_parse_repo_filter_comma_separated():
+    parsed = parse_filters("config repo:a,b,c")
+    assert parsed.text == "config"
+    assert parsed.repo_filter == "a,b,c"
+
+
 def test_parse_multiple_filters():
     parsed = parse_filters("search lang:python repo:tools")
     assert parsed.text == "search"
@@ -422,3 +428,38 @@ def test_search_result_includes_timestamp(indexed_sessions):
     assert len(results) >= 1
     docker_result = [r for r in results if "docker" in r.content][0]
     assert docker_result.timestamp != ""
+
+
+# --- Integration: multi-repo filter ---
+
+
+@pytest.fixture
+def indexed_multi_repo(tmp_path: Path, sample_repo: Path, monkeypatch):
+    """Index the same sample content under three different repo names."""
+    index_dir = tmp_path / "index"
+    version_file = index_dir / ".schema_version"
+    monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
+    monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
+    monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
+
+    from tantivy_search.index import SearchIndex
+
+    idx = SearchIndex()
+    idx.index_repo(str(sample_repo), "repo-alpha")
+    idx.index_repo(str(sample_repo), "repo-beta")
+    idx.index_repo(str(sample_repo), "repo-gamma")
+    return idx
+
+
+def test_search_multi_repo_filter(indexed_multi_repo):
+    parsed = parse_filters("hello repo:repo-alpha,repo-beta")
+    results = search(indexed_multi_repo, parsed, num_results=20)
+    repos = {r.repo for r in results}
+    assert repos <= {"repo-alpha", "repo-beta"}
+    assert len(repos) == 2  # hits from both
+
+
+def test_search_multi_repo_excludes_others(indexed_multi_repo):
+    parsed = parse_filters("hello repo:repo-alpha,repo-beta")
+    results = search(indexed_multi_repo, parsed, num_results=20)
+    assert all(r.repo != "repo-gamma" for r in results)

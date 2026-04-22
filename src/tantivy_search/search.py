@@ -215,12 +215,14 @@ def _build_filter_clauses(
         )
 
     if parsed.repo_filter:
-        clauses.append(
-            (
-                tantivy.Occur.Must,
-                _repo_query(schema, parsed.repo_filter),
+        repos = [r.strip() for r in parsed.repo_filter.split(",")]
+        if len(repos) == 1:
+            repo_q = _repo_query(schema, repos[0])
+        else:
+            repo_q = tantivy.Query.boolean_query(
+                [(tantivy.Occur.Should, _repo_query(schema, r)) for r in repos]
             )
-        )
+        clauses.append((tantivy.Occur.Must, repo_q))
 
     if parsed.file_filter:
         pattern = f".*{re.escape(parsed.file_filter)}.*"
