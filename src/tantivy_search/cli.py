@@ -33,8 +33,7 @@ def main() -> None:
             '  tantivy-search "error handling" -l py\n'
             '  tantivy-search "config" -r myrepo -f "*.toml"\n'
             '  tantivy-search "ssh setup" -r claude-sessions --after 7d\n'
-            '  tantivy-search "error handling" -s             # snippets\n'
-            '  tantivy-search "error handling" -n 10 -e 2,5   # expand results 2 and 5\n'
+            '  tantivy-search "error handling" -n 10 -e 2,5  # expand results 2 and 5 to full content\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -77,18 +76,12 @@ def main() -> None:
         "--no-fuzzy", action="store_true", help="Disable fuzzy matching"
     )
     parser.add_argument(
-        "-s",
-        "--snippet",
-        action="store_true",
-        help="Return snippets instead of full content",
-    )
-    parser.add_argument(
         "-e",
         "--expand",
         type=str,
         default=None,
         metavar="INDICES",
-        help="Return full content for specific result indices (e.g. 0,2,5)",
+        help="Return full content for specific result indices (e.g. 0,2,5). Without -e, results are snippets.",
     )
     parser.add_argument("--status", action="store_true", help="Show index stats")
 
@@ -161,7 +154,8 @@ def cmd_search(args: argparse.Namespace) -> None:
     if args.expand is not None:
         expand_indices = {int(i) for i in args.expand.split(",")}
 
-    snippet_mode = args.snippet and expand_indices is None
+    # Snippets by default; full content only for indices listed via -e/--expand.
+    snippet_mode = expand_indices is None
 
     results = search(
         idx,

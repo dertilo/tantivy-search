@@ -9,8 +9,10 @@ mcp = FastMCP("tantivy-search")
 
 
 @mcp.tool
-def tantivy_search(query: str, num_results: int = 5, snippet: bool = False) -> str:
+def tantivy_search(query: str, num_results: int = 5, snippet: bool = True) -> str:
     """Search indexed code and markdown files using BM25 with fuzzy matching.
+
+    Returns compact snippets by default; pass ``snippet=False`` for full chunks.
 
     Supports inline filters in the query string:
       lang:py, repo:myrepo, file:*.toml, after:7d, before:24h

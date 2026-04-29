@@ -23,9 +23,9 @@ tantivy-search "README lang:md"
 tantivy-search "error -lang:python"          # exclude a language
 tantivy-search "ssh setup after:7d"          # recent results only
 
-# Snippet mode
-tantivy-search "error handling" -s           # compact output
-tantivy-search "error handling" -n 10 -e 2,5 # expand results 2 and 5
+# Browse-then-expand workflow (snippets are the default)
+tantivy-search "error handling" -n 10        # 10 compact snippets with indices
+tantivy-search "error handling" -n 10 -e 2,5 # expand results 2 and 5 to full content
 
 # Index stats
 tantivy-search --status
