@@ -12,16 +12,13 @@ SEARCH_FIELDS = ["content", "title", "heading_path"]
 FIELD_BOOSTS = {"title": 3.0, "heading_path": 2.0, "content": 1.0}
 EXACT_BOOST = 5.0
 
-# Maps filter key aliases to (ParsedQuery field name, schema field name)
+# Maps inline filter key aliases to (ParsedQuery field name, schema field name)
+# Only lang: is retained; repo:/file: are replaced by the --path CLI flag.
 FILTER_KEYS: dict[str, tuple[str, str]] = {
     "lang": ("lang_filter", "language"),
-    "file": ("file_filter", "file_path"),
-    "f": ("file_filter", "file_path"),
-    "repo": ("repo_filter", "repo"),
-    "r": ("repo_filter", "repo"),
 }
 
-FILTER_RE = re.compile(r"(-?)(lang|file|f|repo|r):(\S+)")
+FILTER_RE = re.compile(r"(-?)(lang):(\S+)")
 TIME_FILTER_RE = re.compile(r"(after|before):(\S+)")
 
 # Relative time units for after:/before: filters
@@ -94,13 +91,10 @@ class SearchResult:
 class ParsedQuery:
     text: str
     lang_filter: str | None = None
-    file_filter: str | None = None
-    repo_filter: str | None = None
+    paths: tuple[str, ...] = ()
     after: datetime | None = None
     before: datetime | None = None
     lang_excludes: list[str] | None = None
-    file_excludes: list[str] | None = None
-    repo_excludes: list[str] | None = None
 
 
 def _parse_time_value(value: str) -> datetime | None:
@@ -122,9 +116,10 @@ def _parse_time_value(value: str) -> datetime | None:
 
 
 def parse_filters(raw_query: str) -> ParsedQuery:
-    """Extract lang:, file:, repo:, after:, before: filters from query string.
+    """Extract lang:, after:, before: filters from query string.
 
     Supports negation: ``-lang:python`` excludes Python results.
+    Path filtering is handled at the CLI level via ``--path`` (absolute paths).
     """
     parsed = ParsedQuery(text="")
     remaining = raw_query
@@ -177,31 +172,6 @@ def _build_text_query(index: tantivy.Index, text: str, fuzzy: bool) -> tantivy.Q
     )
 
 
-def _repo_query(schema: tantivy.Schema, value: str) -> tantivy.Query:
-    """Build a repo filter query — matches exact name and any sub-path.
-
-    repo:myproject       -> myproject, myproject/deps/foo, ...
-    repo:myproject/deps  -> myproject/deps/foo, myproject/deps/bar, ...
-
-    ``repo`` is an indexer-assigned partition key, not necessarily a git repo.
-    The ``/`` is a hierarchy separator: a single ``repo`` filter token can address
-    a whole sub-tree (``repo:conversation-history`` matches every
-    ``conversation-history/<machine>/<conv-id>`` partition).
-    """
-    escaped = re.escape(value.rstrip("/"))
-    # Use boolean OR: exact match OR prefix match (with /)
-    exact = tantivy.Query.term_query(
-        schema, "repo", value.rstrip("/"), index_option="freq"
-    )
-    prefix = tantivy.Query.regex_query(schema, "repo", escaped + "/.*")
-    return tantivy.Query.boolean_query(
-        [
-            (tantivy.Occur.Should, exact),
-            (tantivy.Occur.Should, prefix),
-        ]
-    )
-
-
 def _build_filter_clauses(
     schema: tantivy.Schema, parsed: ParsedQuery, index: tantivy.Index | None = None
 ) -> list[tuple[tantivy.Occur, tantivy.Query]]:
@@ -219,35 +189,27 @@ def _build_filter_clauses(
             )
         )
 
-    if parsed.repo_filter:
-        repos = [r.strip() for r in parsed.repo_filter.split(",")]
-        if len(repos) == 1:
-            repo_q = _repo_query(schema, repos[0])
-        else:
-            repo_q = tantivy.Query.boolean_query(
-                [(tantivy.Occur.Should, _repo_query(schema, r)) for r in repos]
-            )
-        clauses.append((tantivy.Occur.Must, repo_q))
+    if parsed.paths:
 
-    if parsed.file_filter:
-        pats = [p.strip() for p in parsed.file_filter.split(",") if p.strip()]
-        if len(pats) == 1:
-            file_q = tantivy.Query.regex_query(
-                schema, "file_path", f".*{re.escape(pats[0])}.*"
-            )
-        else:
-            file_q = tantivy.Query.boolean_query(
+        def _single_path_query(p: str) -> tantivy.Query:
+            escaped = re.escape(p.rstrip("/"))
+            exact = tantivy.Query.regex_query(schema, "file_path", escaped)
+            prefix = tantivy.Query.regex_query(schema, "file_path", escaped + "/.*")
+            return tantivy.Query.boolean_query(
                 [
-                    (
-                        tantivy.Occur.Should,
-                        tantivy.Query.regex_query(
-                            schema, "file_path", f".*{re.escape(p)}.*"
-                        ),
-                    )
-                    for p in pats
+                    (tantivy.Occur.Should, exact),
+                    (tantivy.Occur.Should, prefix),
                 ]
             )
-        clauses.append((tantivy.Occur.Must, file_q))
+
+        path_queries = [_single_path_query(p) for p in parsed.paths]
+        if len(path_queries) == 1:
+            path_q = path_queries[0]
+        else:
+            path_q = tantivy.Query.boolean_query(
+                [(tantivy.Occur.Should, q) for q in path_queries]
+            )
+        clauses.append((tantivy.Occur.Must, path_q))
 
     # --- time range filters ---
 
@@ -259,16 +221,14 @@ def _build_filter_clauses(
         range_q = index.parse_query(f"timestamp:[{after_str} TO {before_str}]")
         clauses.append((tantivy.Occur.Must, range_q))
 
-    # --- default: exclude dep repos unless explicitly targeting them ---
+    # --- default: exclude vendored deps unless explicitly targeting them ---
 
-    _targets_deps = (parsed.repo_filter and "/deps" in parsed.repo_filter) or any(
-        "/deps" in r for r in (parsed.repo_excludes or [])
-    )
+    _targets_deps = any("/deps/" in p for p in parsed.paths)
     if not _targets_deps:
         clauses.append(
             (
                 tantivy.Occur.MustNot,
-                tantivy.Query.regex_query(schema, "repo", ".*/deps/.*"),
+                tantivy.Query.regex_query(schema, "file_path", ".*/deps/.*"),
             )
         )
 
@@ -282,23 +242,6 @@ def _build_filter_clauses(
                 tantivy.Query.term_query(
                     schema, "language", resolved, index_option="freq"
                 ),
-            )
-        )
-
-    for repo in parsed.repo_excludes or []:
-        clauses.append(
-            (
-                tantivy.Occur.MustNot,
-                _repo_query(schema, repo),
-            )
-        )
-
-    for file_pat in parsed.file_excludes or []:
-        pattern = f".*{re.escape(file_pat)}.*"
-        clauses.append(
-            (
-                tantivy.Occur.MustNot,
-                tantivy.Query.regex_query(schema, "file_path", pattern),
             )
         )
 

@@ -87,24 +87,38 @@ class SearchIndex:
     def num_docs(self) -> int:
         return self.searcher().num_docs
 
-    def list_repos(self) -> dict[str, int]:
-        """Return every distinct ``repo`` value in the index with its document count.
+    def list_paths(self) -> dict[str, int]:
+        """Return the longest-common-path-prefix of each repo partition, with doc count.
 
-        Iterates all documents once. On a ~55k-doc index this takes <1s; fine for
-        interactive CLI use, not intended for hot paths.
+        Groups all documents by their ``repo`` partition key, computes the longest
+        common filesystem path prefix of ``file_path`` values within each group,
+        and returns ``{lcp: doc_count}``.  Multiple partitions sharing the same LCP
+        (unusual in practice) have their counts summed.
+
+        Iterates all documents once — fine for interactive CLI use, not a hot path.
         """
-        import tantivy
-
         searcher = self.searcher()
         res = searcher.search(tantivy.Query.all_query(), limit=searcher.num_docs or 1)
-        counts: dict[str, int] = {}
+
+        # Collect file_paths per repo partition
+        repo_paths: dict[str, list[str]] = {}
         for _score, addr in res.hits:
             doc = searcher.doc(addr)
-            vals = doc.to_dict().get("repo", [])
-            if vals:
-                r = vals[0]
-                counts[r] = counts.get(r, 0) + 1
-        return counts
+            d = doc.to_dict()
+            repo_vals = d.get("repo", [])
+            fp_vals = d.get("file_path", [])
+            if repo_vals and fp_vals:
+                repo = repo_vals[0]
+                fp = fp_vals[0]
+                repo_paths.setdefault(repo, []).append(fp)
+
+        # Compute longest common path prefix per partition
+        result: dict[str, int] = {}
+        for paths in repo_paths.values():
+            lcp = os.path.commonpath(paths) if len(paths) > 1 else paths[0]
+            result[lcp] = result.get(lcp, 0) + len(paths)
+
+        return result
 
     def has_repo(self, repo_name: str) -> bool:
         """Check if the index contains any docs for a repo."""

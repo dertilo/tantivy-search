@@ -1,40 +1,52 @@
-"""Tests for SearchIndex.list_repos() and _render_repo_tree()."""
+"""Tests for SearchIndex.list_paths() and _render_path_tree()."""
 
 from pathlib import Path
 
 import pytest
 
-from tantivy_search.cli import _render_repo_tree
+from tantivy_search.cli import _render_path_tree
 from tantivy_search.index import SearchIndex
 
 
 @pytest.fixture
-def indexed_multi_name_repo(tmp_path: Path, sample_repo: Path, monkeypatch):
-    """Index the same sample_repo under three different logical repo names."""
+def indexed_multi_path(tmp_path: Path, monkeypatch):
+    """Index two distinct directories under separate repo partitions."""
     index_dir = tmp_path / "index"
     version_file = index_dir / ".schema_version"
     monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
     monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
     monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
 
+    dir_alpha = tmp_path / "proj-alpha"
+    dir_alpha.mkdir()
+    (dir_alpha / "main.py").write_text("def hello(): pass\n")
+    (dir_alpha / "utils.py").write_text("def util(): pass\n")
+
+    dir_beta = tmp_path / "proj-beta"
+    dir_beta.mkdir()
+    (dir_beta / "app.py").write_text("def app(): pass\n")
+    (dir_beta / "models.py").write_text("class Foo: pass\n")
+
     idx = SearchIndex()
-    idx.index_repo(str(sample_repo), "alpha")
-    idx.index_repo(str(sample_repo), "beta")
-    idx.index_repo(str(sample_repo), "gamma")
-    return idx
+    idx.index_repo(str(dir_alpha), "alpha")
+    idx.index_repo(str(dir_beta), "beta")
+    return idx, dir_alpha, dir_beta
 
 
-def test_list_repos_collects_distinct_repos(
-    indexed_multi_name_repo: SearchIndex, sample_repo: Path
-):
-    repos = indexed_multi_name_repo.list_repos()
-    assert set(repos.keys()) == {"alpha", "beta", "gamma"}
-    # Each repo was indexed from the same sample_repo so counts should match
-    assert repos["alpha"] == repos["beta"] == repos["gamma"]
-    assert repos["alpha"] > 0
+def test_list_paths_collects_lcp(indexed_multi_path):
+    idx, dir_alpha, dir_beta = indexed_multi_path
+    paths = idx.list_paths()
+
+    # Both partitions' LCPs should appear
+    assert str(dir_alpha) in paths
+    assert str(dir_beta) in paths
+
+    # Counts match the number of indexed chunks (2 files per dir, likely 1 chunk each)
+    assert paths[str(dir_alpha)] > 0
+    assert paths[str(dir_beta)] > 0
 
 
-def test_render_repo_tree_format():
+def test_render_path_tree_format():
     repos = {
         "claudia": 4321,
         "chinomatico-monorepo": 2506,
@@ -43,11 +55,11 @@ def test_render_repo_tree_format():
         "conversation-history/old-laptop/2026-04-28": 512,
         "conversation-history/old-laptop/2026-04-29": 347,
     }
-    output = _render_repo_tree(repos)
+    output = _render_path_tree(repos)
     lines = output.splitlines()
 
     # Header present
-    assert lines[0].startswith("Repos in index (6 partitions,")
+    assert lines[0].startswith("Paths in index (6 roots,")
 
     # Every input name appears somewhere in the output
     for name in repos:

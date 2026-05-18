@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tantivy_search.search import (
+    ParsedQuery,
     SearchResult,
     _parse_time_value,
     format_results,
@@ -22,8 +23,7 @@ def test_parse_plain_query():
     parsed = parse_filters("hello world")
     assert parsed.text == "hello world"
     assert parsed.lang_filter is None
-    assert parsed.file_filter is None
-    assert parsed.repo_filter is None
+    assert parsed.paths == ()
 
 
 def test_parse_lang_filter():
@@ -32,44 +32,10 @@ def test_parse_lang_filter():
     assert parsed.lang_filter == "python"
 
 
-def test_parse_file_filter():
-    parsed = parse_filters("TODO file:README")
-    assert parsed.text == "TODO"
-    assert parsed.file_filter == "README"
-
-
-def test_parse_file_short_alias():
-    parsed = parse_filters("TODO f:*.py")
-    assert parsed.file_filter == "*.py"
-
-
-def test_parse_repo_filter():
-    parsed = parse_filters("config repo:myrepo")
-    assert parsed.repo_filter == "myrepo"
-
-
-def test_parse_repo_short_alias():
-    parsed = parse_filters("config r:myrepo")
-    assert parsed.repo_filter == "myrepo"
-
-
-def test_parse_repo_filter_comma_separated():
-    parsed = parse_filters("config repo:a,b,c")
-    assert parsed.text == "config"
-    assert parsed.repo_filter == "a,b,c"
-
-
-def test_parse_file_filter_comma_separated():
-    parsed = parse_filters("hello file:a,b")
-    assert parsed.text == "hello"
-    assert parsed.file_filter == "a,b"
-
-
 def test_parse_multiple_filters():
-    parsed = parse_filters("search lang:python repo:tools")
+    parsed = parse_filters("search lang:python")
     assert parsed.text == "search"
     assert parsed.lang_filter == "python"
-    assert parsed.repo_filter == "tools"
 
 
 def test_parse_filters_only():
@@ -83,25 +49,6 @@ def test_parse_negated_lang():
     assert parsed.text == "error"
     assert parsed.lang_filter is None
     assert parsed.lang_excludes == ["python"]
-
-
-def test_parse_negated_repo():
-    parsed = parse_filters("-repo:vendor search")
-    assert parsed.text == "search"
-    assert parsed.repo_excludes == ["vendor"]
-
-
-def test_parse_negated_file():
-    parsed = parse_filters("TODO -f:test")
-    assert parsed.text == "TODO"
-    assert parsed.file_excludes == ["test"]
-
-
-def test_parse_mixed_include_and_exclude():
-    parsed = parse_filters("func lang:python -repo:vendor")
-    assert parsed.text == "func"
-    assert parsed.lang_filter == "python"
-    assert parsed.repo_excludes == ["vendor"]
 
 
 def test_parse_multiple_excludes():
@@ -164,13 +111,6 @@ def test_parse_after_and_before():
     assert parsed.text == "config"
     assert parsed.after == datetime(2026, 3, 1, tzinfo=timezone.utc)
     assert parsed.before == datetime(2026, 3, 14, tzinfo=timezone.utc)
-
-
-def test_parse_time_with_other_filters():
-    parsed = parse_filters("ssh r:claude-sessions after:7d")
-    assert parsed.text == "ssh"
-    assert parsed.repo_filter == "claude-sessions"
-    assert parsed.after is not None
 
 
 # --- format_results (JSON) ---
@@ -282,12 +222,6 @@ def test_search_lang_alias_md(indexed_repo):
     assert all(r.language == "markdown" for r in results)
 
 
-def test_search_repo_filter(indexed_repo):
-    parsed = parse_filters("hello repo:sample-repo")
-    results = search(indexed_repo, parsed, num_results=10)
-    assert all(r.repo == "sample-repo" for r in results)
-
-
 def test_search_lang_filter_markdown(indexed_repo):
     parsed = parse_filters("lang:markdown")
     results = search(indexed_repo, parsed, num_results=50)
@@ -334,11 +268,91 @@ def test_search_exclude_with_text(indexed_repo):
     assert all(r.language != "markdown" for r in results)
 
 
-def test_search_include_and_exclude(indexed_repo):
-    parsed = parse_filters("lang:python -file:test")
+# --- Integration: --path filter ---
+
+
+def test_path_filter_descendants(indexed_repo, sample_repo: Path):
+    """--path to a directory matches all files underneath it."""
+    parsed = ParsedQuery(text="", paths=(str(sample_repo),))
     results = search(indexed_repo, parsed, num_results=50)
-    assert all(r.language == "python" for r in results)
-    assert all("test" not in r.file_path for r in results)
+    assert len(results) > 0
+    assert all(r.file_path.startswith(str(sample_repo)) for r in results)
+
+
+def test_path_filter_exact_file(indexed_repo, sample_repo: Path):
+    """--path to an exact file matches only chunks from that file."""
+    main_py = str(sample_repo / "main.py")
+    parsed = ParsedQuery(text="", paths=(main_py,))
+    results = search(indexed_repo, parsed, num_results=50)
+    assert len(results) > 0
+    assert all("main.py" in r.file_path for r in results)
+    assert all("README" not in r.file_path for r in results)
+
+
+def test_path_filter_two_paths_or(indexed_repo, sample_repo: Path):
+    """Two --path values are OR-joined; files outside both are excluded."""
+    main_py = str(sample_repo / "main.py")
+    src_dir = str(sample_repo / "src")
+    parsed = ParsedQuery(text="", paths=(main_py, src_dir))
+    results = search(indexed_repo, parsed, num_results=50)
+    assert len(results) > 0
+    assert all("main.py" in r.file_path or "/src/" in r.file_path for r in results)
+    # README and CHANGELOG are outside both paths
+    assert all("README" not in r.file_path for r in results)
+    assert all("CHANGELOG" not in r.file_path for r in results)
+
+
+def test_path_filter_with_text_query(indexed_repo, sample_repo: Path):
+    """--path AND text are AND-joined: only matching chunks within the path."""
+    src_dir = str(sample_repo / "src")
+    parsed = ParsedQuery(text="add", paths=(src_dir,))
+    results = search(indexed_repo, parsed, num_results=50)
+    # Results must be from src/ and contain relevant content
+    assert all("/src/" in r.file_path for r in results)
+
+
+def test_path_no_leading_slash_error():
+    """--path without leading '/' should cause an argparse error (exit 2)."""
+    from unittest.mock import patch
+
+    from tantivy_search.cli import main
+
+    with patch("sys.argv", ["tantivy-search", "query", "--path", "relative/path"]):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    assert exc_info.value.code != 0
+
+
+def test_path_metachar_escaped(tmp_path: Path, monkeypatch):
+    """Regex metacharacters in path names are properly escaped."""
+    index_dir = tmp_path / "index"
+    version_file = index_dir / ".schema_version"
+    monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
+    monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
+    monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
+
+    # Directory name contains '.' and '+' — regex metacharacters
+    special_dir = tmp_path / "my.special+dir"
+    special_dir.mkdir()
+    (special_dir / "a.py").write_text("x = 1\n")
+    (special_dir / "b.py").write_text("y = 2\n")
+
+    other_dir = tmp_path / "my_special_dir"
+    other_dir.mkdir()
+    (other_dir / "c.py").write_text("z = 3\n")
+
+    from tantivy_search.index import SearchIndex
+
+    idx = SearchIndex()
+    idx.index_repo(str(special_dir), "special")
+    idx.index_repo(str(other_dir), "other")
+
+    parsed = ParsedQuery(text="", paths=(str(special_dir),))
+    results = search(idx, parsed, num_results=50)
+    assert len(results) > 0
+    # Only files from special_dir (not other_dir) should match
+    assert all(str(special_dir) in r.file_path for r in results)
+    assert all(str(other_dir) not in r.file_path for r in results)
 
 
 # --- Integration: timestamp search ---
@@ -434,47 +448,3 @@ def test_search_result_includes_timestamp(indexed_sessions):
     assert len(results) >= 1
     docker_result = [r for r in results if "docker" in r.content][0]
     assert docker_result.timestamp != ""
-
-
-# --- Integration: multi-repo filter ---
-
-
-@pytest.fixture
-def indexed_multi_repo(tmp_path: Path, sample_repo: Path, monkeypatch):
-    """Index the same sample content under three different repo names."""
-    index_dir = tmp_path / "index"
-    version_file = index_dir / ".schema_version"
-    monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
-    monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
-    monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
-
-    from tantivy_search.index import SearchIndex
-
-    idx = SearchIndex()
-    idx.index_repo(str(sample_repo), "repo-alpha")
-    idx.index_repo(str(sample_repo), "repo-beta")
-    idx.index_repo(str(sample_repo), "repo-gamma")
-    return idx
-
-
-def test_search_multi_repo_filter(indexed_multi_repo):
-    parsed = parse_filters("hello repo:repo-alpha,repo-beta")
-    results = search(indexed_multi_repo, parsed, num_results=20)
-    repos = {r.repo for r in results}
-    assert repos <= {"repo-alpha", "repo-beta"}
-    assert len(repos) == 2  # hits from both
-
-
-def test_search_multi_repo_excludes_others(indexed_multi_repo):
-    parsed = parse_filters("hello repo:repo-alpha,repo-beta")
-    results = search(indexed_multi_repo, parsed, num_results=20)
-    assert all(r.repo != "repo-gamma" for r in results)
-
-
-def test_search_multi_file_filter(indexed_repo):
-    # main.py and src/utils.py are distinct path substrings; README.md has neither
-    parsed = parse_filters("file:main.py,utils.py")
-    results = search(indexed_repo, parsed, num_results=50)
-    assert len(results) > 0
-    assert all("main.py" in r.file_path or "utils.py" in r.file_path for r in results)
-    assert all("README" not in r.file_path for r in results)

@@ -11,13 +11,21 @@ from tantivy_search.config import (
 )
 from tantivy_search.index import SearchIndex
 from tantivy_search.search import (
+    _parse_time_value,
+    format_results,
     parse_filters,
     search,
-    format_results,
-    _parse_time_value,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_path(value: str) -> str:
+    if not value.startswith("/"):
+        raise argparse.ArgumentTypeError(
+            f"--path must be an absolute filesystem path starting with '/': {value!r}"
+        )
+    return value
 
 
 def main() -> None:
@@ -27,12 +35,12 @@ def main() -> None:
             "inline filters (also supported inside the query string):\n"
             "  lang:<name>   filter by language (python, js, ts, cpp, rust, markdown, ...)\n"
             "                aliases: py, md, rb, rs, sh, cs, kt\n"
-            "  -lang:<name>  exclude language (negation, works for all filters)\n"
+            "  -lang:<name>  exclude language (negation)\n"
             "\n"
             "examples:\n"
             '  tantivy-search "error handling" -l py\n'
-            '  tantivy-search "config" -r myrepo -f "*.toml"\n'
-            '  tantivy-search "ssh setup" -r claude-sessions --after 7d\n'
+            '  tantivy-search "config" --path /home/user/code/myrepo\n'
+            '  tantivy-search "ssh setup" --path /home/user/Documents/notes --after 7d\n'
             '  tantivy-search "error handling" -n 10 -e 2,5  # expand results 2 and 5 to full content\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -44,11 +52,15 @@ def main() -> None:
         "-n", "--num-results", type=int, default=5, help="Max results (default: 5)"
     )
     parser.add_argument(
-        "-r",
-        "--repo",
-        type=str,
+        "--path",
+        type=_validate_path,
+        action="append",
         default=None,
-        help="logical partition (may be hierarchical with '/'). Use --list-repos to see what exists.",
+        metavar="PATH",
+        help=(
+            "Absolute filesystem path. Repeat to OR multiple paths. "
+            "Matches the path itself or any descendant."
+        ),
     )
     parser.add_argument(
         "-l",
@@ -56,9 +68,6 @@ def main() -> None:
         type=str,
         default=None,
         help="Filter by language (python, js, markdown, ... aliases: py, md, rs)",
-    )
-    parser.add_argument(
-        "-f", "--file", type=str, default=None, help="Filter by file path substring"
     )
     parser.add_argument(
         "--after",
@@ -85,17 +94,17 @@ def main() -> None:
     )
     parser.add_argument("--status", action="store_true", help="Show index stats")
     parser.add_argument(
-        "--list-repos",
+        "--list-paths",
         action="store_true",
-        help="Print all repo partitions as a tree with doc counts",
+        help="Print all indexed filesystem paths as a tree with doc counts",
     )
 
     args = parser.parse_args()
 
     if args.status:
         cmd_status()
-    elif args.list_repos:
-        cmd_list_repos(args)
+    elif args.list_paths:
+        cmd_list_paths(args)
     elif args.query:
         cmd_search(args)
     else:
@@ -140,14 +149,14 @@ def main_index() -> None:
     write_schema_version()
 
 
-def _render_repo_tree(repos: dict[str, int]) -> str:
-    if not repos:
-        return "Repos in index (0 partitions, 0 docs)"
-    total = sum(repos.values())
-    lines = [f"Repos in index ({len(repos)} partitions, {total} docs)", ""]
+def _render_path_tree(paths: dict[str, int]) -> str:
+    if not paths:
+        return "Paths in index (0 roots, 0 docs)"
+    total = sum(paths.values())
+    lines = [f"Paths in index ({len(paths)} roots, {total} docs)", ""]
     seen_prefixes: set[str] = set()
     name_width = 48
-    for name in sorted(repos):
+    for name in sorted(paths):
         parts = name.split("/")
         for i in range(len(parts) - 1):
             prefix = "/".join(parts[: i + 1]) + "/"
@@ -160,31 +169,29 @@ def _render_repo_tree(repos: dict[str, int]) -> str:
         # Pad leaf+indent column to name_width, then right-align count
         label = f"{leaf_indent}{leaf}"
         pad = max(1, name_width - len(label))
-        lines.append(f"{label}{' ' * pad}{repos[name]:>8,}")
+        lines.append(f"{label}{' ' * pad}{paths[name]:>8,}")
     return "\n".join(lines)
 
 
-def cmd_list_repos(args: argparse.Namespace) -> int:
+def cmd_list_paths(args: argparse.Namespace) -> int:
     idx = SearchIndex()
-    repos = idx.list_repos()
-    print(_render_repo_tree(repos))
+    paths = idx.list_paths()
+    print(_render_path_tree(paths))
     return 0
 
 
 def cmd_search(args: argparse.Namespace) -> None:
     parsed = parse_filters(args.query)
 
-    # CLI flags override/supplement inline filters
-    if args.repo and not parsed.repo_filter:
-        parsed.repo_filter = args.repo
+    # CLI flags supplement inline filters
     if args.lang and not parsed.lang_filter:
         parsed.lang_filter = args.lang
-    if args.file and not parsed.file_filter:
-        parsed.file_filter = args.file
     if args.after and not parsed.after:
         parsed.after = _parse_time_value(args.after)
     if args.before and not parsed.before:
         parsed.before = _parse_time_value(args.before)
+    if args.path:
+        parsed.paths = tuple(args.path)
 
     idx = SearchIndex()
 

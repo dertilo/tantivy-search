@@ -15,8 +15,8 @@ def tantivy_search(query: str, num_results: int = 5, snippet: bool = True) -> st
     Returns compact snippets by default; pass ``snippet=False`` for full chunks.
 
     Supports inline filters in the query string:
-      lang:py, repo:myrepo, file:*.toml, after:7d, before:24h
-    Prefix with - to exclude: -lang:python, -repo:vendor
+      lang:py, after:7d, before:24h
+    Prefix with - to exclude: -lang:python
     """
     parsed = parse_filters(query)
     idx = SearchIndex()

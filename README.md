@@ -13,33 +13,36 @@ Local code and markdown search tool built on [Tantivy](https://github.com/quickw
 ## Usage
 
 ```bash
-# Index directories (repo name derived from directory basename)
+# Index directories (partition name derived from directory basename)
 tantivy-index ~/code/my-project ~/Documents/notes
 
 # Search
 tantivy-search "error handling lang:py"
-tantivy-search "config repo:my-project f:*.toml"
+tantivy-search "config" --path /home/user/code/my-project
 tantivy-search "README lang:md"
 tantivy-search "error -lang:python"          # exclude a language
 tantivy-search "ssh setup after:7d"          # recent results only
+
+# Path filter: absolute path, repeatable for OR semantics
+tantivy-search "config" --path /home/user/code/my-project --path /home/user/Documents/notes
 
 # Browse-then-expand workflow (snippets are the default)
 tantivy-search "error handling" -n 10        # 10 compact snippets with indices
 tantivy-search "error handling" -n 10 -e 2,5 # expand results 2 and 5 to full content
 
-# Index stats
+# Index stats and listing
 tantivy-search --status
+tantivy-search --list-paths   # tree of indexed filesystem paths with doc counts
 ```
 
-### Inline filters
+### Filters
 
-| Filter | Description |
-|--------|-------------|
-| `lang:<name>` | Filter by language (python, js, ts, rust, markdown, ...) |
-| `file:<pat>` / `f:<pat>` | Filter by file path substring |
-| `repo:<name>` / `r:<name>` | Filter by repository name |
+| Flag / Inline | Description |
+|---------------|-------------|
+| `--path /abs/path` | Absolute filesystem path. Repeat to OR multiple paths. Matches the path itself or any descendant. |
+| `-l` / `lang:<name>` | Filter by language (python, js, ts, rust, markdown, ...) |
 | `after:<time>` / `before:<time>` | Timestamp filter (24h, 7d, 2w, or 2026-03-14) |
-| `-lang:<name>` | Exclude a language (negation works for all filters) |
+| `-lang:<name>` | Exclude a language |
 
 Language aliases: `py`, `md`, `rb`, `rs`, `sh`, `cs`, `kt`.
 
