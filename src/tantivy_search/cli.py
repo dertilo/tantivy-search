@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 from pathlib import Path
 
 from tantivy_search.config import (
@@ -96,7 +97,15 @@ def main() -> None:
     parser.add_argument(
         "--list-paths",
         action="store_true",
-        help="Print all indexed filesystem paths as a tree with doc counts",
+        help="Print all indexed filesystem paths, one per line",
+    )
+    parser.add_argument(
+        "--collapse",
+        action="store_true",
+        help=(
+            "With --list-paths: collapse ≥3 siblings under the same parent "
+            "into a summary line (e.g. /parent/* (5 entries))"
+        ),
     )
 
     args = parser.parse_args()
@@ -149,10 +158,46 @@ def main_index() -> None:
     write_schema_version()
 
 
+def _collapse_paths(sorted_paths: list[str]) -> list[str]:
+    """Collapse ≥3 siblings sharing the same parent into a single summary line.
+
+    Only collapses when the parent directory is not itself present in the listing.
+    Output is returned sorted alphabetically.
+    """
+    path_set = set(sorted_paths)
+    parent_children: dict[str, list[str]] = {}
+    for p in sorted_paths:
+        parent = os.path.dirname(p)
+        parent_children.setdefault(parent, []).append(p)
+
+    collapsible = {
+        parent
+        for parent, children in parent_children.items()
+        if len(children) >= 3 and parent not in path_set
+    }
+
+    result: list[str] = []
+    emitted: set[str] = set()
+    for p in sorted_paths:
+        parent = os.path.dirname(p)
+        if parent in collapsible:
+            if parent not in emitted:
+                n = len(parent_children[parent])
+                result.append(f"{parent}/* ({n} entries)")
+                emitted.add(parent)
+        else:
+            result.append(p)
+
+    return sorted(result)
+
+
 def cmd_list_paths(args: argparse.Namespace) -> int:
     idx = SearchIndex()
     paths = idx.list_paths()
-    for p in sorted(paths):
+    lines: list[str] = sorted(paths)
+    if getattr(args, "collapse", False):
+        lines = _collapse_paths(lines)
+    for p in lines:
         print(p)
     return 0
 

@@ -132,3 +132,39 @@ def test_list_paths_cli_flat_sorted(tmp_path: Path, monkeypatch, capsys):
     # Both paths present
     assert any(str(dir_a) in line for line in lines)
     assert any(str(dir_b) in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# _collapse_paths unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_collapse_paths_three_siblings_collapsed():
+    """≥3 siblings under a parent not in the listing → single summary line."""
+    from tantivy_search.cli import _collapse_paths
+
+    paths = ["/data/a", "/data/b", "/data/c"]
+    result = _collapse_paths(paths)
+    assert result == ["/data/* (3 entries)"]
+
+
+def test_collapse_paths_two_siblings_stay():
+    """<3 siblings under the same parent → not collapsed."""
+    from tantivy_search.cli import _collapse_paths
+
+    paths = ["/data/a", "/data/b"]
+    result = _collapse_paths(paths)
+    assert result == ["/data/a", "/data/b"]
+
+
+def test_collapse_paths_parent_present_no_collapse():
+    """If the parent directory is itself in the listing, children are NOT collapsed."""
+    from tantivy_search.cli import _collapse_paths
+
+    paths = sorted(["/data", "/data/a", "/data/b", "/data/c"])
+    result = _collapse_paths(paths)
+    assert "/data" in result
+    assert "/data/a" in result
+    assert "/data/b" in result
+    assert "/data/c" in result
+    assert all("/* " not in p for p in result)
