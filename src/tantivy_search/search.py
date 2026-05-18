@@ -227,11 +227,18 @@ def _build_filter_clauses(
     if parsed.file_filter:
         pats = [p.strip() for p in parsed.file_filter.split(",") if p.strip()]
         if len(pats) == 1:
-            file_q = tantivy.Query.regex_query(schema, "file_path", f".*{re.escape(pats[0])}.*")
+            file_q = tantivy.Query.regex_query(
+                schema, "file_path", f".*{re.escape(pats[0])}.*"
+            )
         else:
             file_q = tantivy.Query.boolean_query(
                 [
-                    (tantivy.Occur.Should, tantivy.Query.regex_query(schema, "file_path", f".*{re.escape(p)}.*"))
+                    (
+                        tantivy.Occur.Should,
+                        tantivy.Query.regex_query(
+                            schema, "file_path", f".*{re.escape(p)}.*"
+                        ),
+                    )
                     for p in pats
                 ]
             )
