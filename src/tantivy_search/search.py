@@ -182,6 +182,11 @@ def _repo_query(schema: tantivy.Schema, value: str) -> tantivy.Query:
 
     repo:myproject       -> myproject, myproject/deps/foo, ...
     repo:myproject/deps  -> myproject/deps/foo, myproject/deps/bar, ...
+
+    ``repo`` is an indexer-assigned partition key, not necessarily a git repo.
+    The ``/`` is a hierarchy separator: a single ``repo`` filter token can address
+    a whole sub-tree (``repo:conversation-history`` matches every
+    ``conversation-history/<machine>/<conv-id>`` partition).
     """
     escaped = re.escape(value.rstrip("/"))
     # Use boolean OR: exact match OR prefix match (with /)

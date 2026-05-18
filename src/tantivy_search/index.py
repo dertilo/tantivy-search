@@ -87,6 +87,25 @@ class SearchIndex:
     def num_docs(self) -> int:
         return self.searcher().num_docs
 
+    def list_repos(self) -> dict[str, int]:
+        """Return every distinct ``repo`` value in the index with its document count.
+
+        Iterates all documents once. On a ~55k-doc index this takes <1s; fine for
+        interactive CLI use, not intended for hot paths.
+        """
+        import tantivy
+
+        searcher = self.searcher()
+        res = searcher.search(tantivy.Query.all_query(), limit=searcher.num_docs or 1)
+        counts: dict[str, int] = {}
+        for _score, addr in res.hits:
+            doc = searcher.doc(addr)
+            vals = doc.to_dict().get("repo", [])
+            if vals:
+                r = vals[0]
+                counts[r] = counts.get(r, 0) + 1
+        return counts
+
     def has_repo(self, repo_name: str) -> bool:
         """Check if the index contains any docs for a repo."""
         searcher = self.searcher()

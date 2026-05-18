@@ -48,7 +48,7 @@ def main() -> None:
         "--repo",
         type=str,
         default=None,
-        help="Filter by repository name(s), comma-separated (e.g. myrepo or repo1,repo2)",
+        help="logical partition (may be hierarchical with '/'). Use --list-repos to see what exists.",
     )
     parser.add_argument(
         "-l",
@@ -84,11 +84,18 @@ def main() -> None:
         help="Return full content for specific result indices (e.g. 0,2,5). Without -e, results are snippets.",
     )
     parser.add_argument("--status", action="store_true", help="Show index stats")
+    parser.add_argument(
+        "--list-repos",
+        action="store_true",
+        help="Print all repo partitions as a tree with doc counts",
+    )
 
     args = parser.parse_args()
 
     if args.status:
         cmd_status()
+    elif args.list_repos:
+        cmd_list_repos(args)
     elif args.query:
         cmd_search(args)
     else:
@@ -131,6 +138,37 @@ def main_index() -> None:
         )
 
     write_schema_version()
+
+
+def _render_repo_tree(repos: dict[str, int]) -> str:
+    if not repos:
+        return "Repos in index (0 partitions, 0 docs)"
+    total = sum(repos.values())
+    lines = [f"Repos in index ({len(repos)} partitions, {total} docs)", ""]
+    seen_prefixes: set[str] = set()
+    name_width = 48
+    for name in sorted(repos):
+        parts = name.split("/")
+        for i in range(len(parts) - 1):
+            prefix = "/".join(parts[: i + 1]) + "/"
+            if prefix not in seen_prefixes:
+                seen_prefixes.add(prefix)
+                indent = "    " * i
+                lines.append(f"{indent}{parts[i]}/")
+        leaf_indent = "    " * (len(parts) - 1)
+        leaf = parts[-1]
+        # Pad leaf+indent column to name_width, then right-align count
+        label = f"{leaf_indent}{leaf}"
+        pad = max(1, name_width - len(label))
+        lines.append(f"{label}{' ' * pad}{repos[name]:>8,}")
+    return "\n".join(lines)
+
+
+def cmd_list_repos(args: argparse.Namespace) -> int:
+    idx = SearchIndex()
+    repos = idx.list_repos()
+    print(_render_repo_tree(repos))
+    return 0
 
 
 def cmd_search(args: argparse.Namespace) -> None:

@@ -9,6 +9,12 @@ def build_schema() -> tantivy.Schema:
     builder.add_text_field(
         "file_path", stored=True, tokenizer_name="raw", index_option="freq"
     )
+    # ``repo`` is a logical index partition (a.k.a. "sub-repo"). It may be a bare
+    # name (``"claudia"``) or a ``/``-delimited hierarchy (e.g.
+    # ``"conversation-history/old-laptop/<conv-id>"``). The value is chosen by
+    # whoever calls ``SearchIndex.index_repo()`` / ``add_file_chunks()`` and is not
+    # required to be a git repository. Hierarchical names enable
+    # multi-granularity filtering via the prefix arm of ``_repo_query``.
     builder.add_text_field(
         "repo", stored=True, tokenizer_name="raw", index_option="freq"
     )
