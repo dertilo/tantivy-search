@@ -403,9 +403,13 @@ def indexed_sessions(tmp_path: Path, monkeypatch):
         chunk_index=0,
     )
 
-    idx.add_file_chunks("/sessions/old.jsonl", "claude-sessions", [old_chunk])
-    idx.add_file_chunks("/sessions/recent.jsonl", "claude-sessions", [recent_chunk])
-    idx.add_file_chunks("/code/main.py", "myrepo", [no_ts_chunk])
+    idx.add_file_chunks(
+        "/sessions/old.jsonl", "claude-sessions", "/sessions", [old_chunk]
+    )
+    idx.add_file_chunks(
+        "/sessions/recent.jsonl", "claude-sessions", "/sessions", [recent_chunk]
+    )
+    idx.add_file_chunks("/code/main.py", "myrepo", "/code", [no_ts_chunk])
     return idx
 
 

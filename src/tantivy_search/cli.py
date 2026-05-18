@@ -149,34 +149,11 @@ def main_index() -> None:
     write_schema_version()
 
 
-def _render_path_tree(paths: dict[str, int]) -> str:
-    if not paths:
-        return "Paths in index (0 roots, 0 docs)"
-    total = sum(paths.values())
-    lines = [f"Paths in index ({len(paths)} roots, {total} docs)", ""]
-    seen_prefixes: set[str] = set()
-    name_width = 48
-    for name in sorted(paths):
-        parts = name.split("/")
-        for i in range(len(parts) - 1):
-            prefix = "/".join(parts[: i + 1]) + "/"
-            if prefix not in seen_prefixes:
-                seen_prefixes.add(prefix)
-                indent = "    " * i
-                lines.append(f"{indent}{parts[i]}/")
-        leaf_indent = "    " * (len(parts) - 1)
-        leaf = parts[-1]
-        # Pad leaf+indent column to name_width, then right-align count
-        label = f"{leaf_indent}{leaf}"
-        pad = max(1, name_width - len(label))
-        lines.append(f"{label}{' ' * pad}{paths[name]:>8,}")
-    return "\n".join(lines)
-
-
 def cmd_list_paths(args: argparse.Namespace) -> int:
     idx = SearchIndex()
     paths = idx.list_paths()
-    print(_render_path_tree(paths))
+    for p in sorted(paths):
+        print(p)
     return 0
 
 

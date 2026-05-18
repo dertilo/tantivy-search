@@ -88,35 +88,26 @@ class SearchIndex:
         return self.searcher().num_docs
 
     def list_paths(self) -> dict[str, int]:
-        """Return the longest-common-path-prefix of each repo partition, with doc count.
+        """Return every distinct ``root_path`` value in the index with its document count.
 
-        Groups all documents by their ``repo`` partition key, computes the longest
-        common filesystem path prefix of ``file_path`` values within each group,
-        and returns ``{lcp: doc_count}``.  Multiple partitions sharing the same LCP
-        (unusual in practice) have their counts summed.
+        Iterates all documents once and groups by the stored ``root_path`` field,
+        which is the on-disk directory that was passed to ``index_repo`` (or the
+        equivalent watched root for callers that use ``add_file_chunks`` directly).
+        This replaces the old LCP/dirname heuristic, which broke for single-file
+        repos and repos whose files don't share a common filesystem prefix.
 
-        Iterates all documents once — fine for interactive CLI use, not a hot path.
+        Fine for interactive CLI use — not a hot path.
         """
         searcher = self.searcher()
         res = searcher.search(tantivy.Query.all_query(), limit=searcher.num_docs or 1)
 
-        # Collect file_paths per repo partition
-        repo_paths: dict[str, list[str]] = {}
+        result: dict[str, int] = {}
         for _score, addr in res.hits:
             doc = searcher.doc(addr)
-            d = doc.to_dict()
-            repo_vals = d.get("repo", [])
-            fp_vals = d.get("file_path", [])
-            if repo_vals and fp_vals:
-                repo = repo_vals[0]
-                fp = fp_vals[0]
-                repo_paths.setdefault(repo, []).append(fp)
-
-        # Compute longest common path prefix per partition
-        result: dict[str, int] = {}
-        for paths in repo_paths.values():
-            lcp = os.path.commonpath(paths) if len(paths) > 1 else paths[0]
-            result[lcp] = result.get(lcp, 0) + len(paths)
+            vals = doc.to_dict().get("root_path", [])
+            if vals:
+                root = vals[0]
+                result[root] = result.get(root, 0) + 1
 
         return result
 
@@ -152,6 +143,7 @@ class SearchIndex:
         writer: tantivy.IndexWriter,
         file_path: str,
         repo_name: str,
+        root_path: str,
         chunks: list[Chunk],
     ) -> None:
         """Write chunk documents using an existing writer."""
@@ -160,6 +152,7 @@ class SearchIndex:
             doc.add_text("id", f"{file_path}:{i}")
             doc.add_text("file_path", file_path)
             doc.add_text("repo", repo_name)
+            doc.add_text("root_path", root_path)
             doc.add_text("content", chunk.content)
             doc.add_text("language", chunk.language)
             doc.add_text("heading_path", chunk.heading_path)
@@ -171,11 +164,11 @@ class SearchIndex:
             writer.add_document(doc)
 
     def add_file_chunks(
-        self, file_path: str, repo_name: str, chunks: list[Chunk]
+        self, file_path: str, repo_name: str, root_path: str, chunks: list[Chunk]
     ) -> None:
         """Add documents for a single file."""
         with self._index.writer(heap_size=WRITER_HEAP_SIZE, num_threads=1) as writer:
-            self._write_chunks(writer, file_path, repo_name, chunks)
+            self._write_chunks(writer, file_path, repo_name, root_path, chunks)
 
     def index_repo(self, repo_path: str, repo_name: str) -> IndexStats:
         """Delete all existing docs for repo, then re-chunk and re-index all files."""
@@ -197,7 +190,7 @@ class SearchIndex:
                     logger.warning("Failed to chunk %s: %s", fpath, e)
                     stats.errors.append(f"{fpath}: {e}")
                     continue
-                self._write_chunks(writer, str(fpath), repo_name, chunks)
+                self._write_chunks(writer, str(fpath), repo_name, repo_path, chunks)
                 stats.chunks_total += len(chunks)
 
         stats.elapsed_seconds = time.time() - start

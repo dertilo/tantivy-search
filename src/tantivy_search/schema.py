@@ -18,6 +18,13 @@ def build_schema() -> tantivy.Schema:
     builder.add_text_field(
         "repo", stored=True, tokenizer_name="raw", index_option="freq"
     )
+    # ``root_path`` is the absolute on-disk directory passed to ``index_repo``
+    # (or the equivalent watched root for watchers that call ``add_file_chunks``
+    # directly). Stored verbatim so ``list_paths()`` can group docs by their
+    # actual filesystem root without any LCP/dirname heuristic.
+    builder.add_text_field(
+        "root_path", stored=True, tokenizer_name="raw", index_option="freq"
+    )
     builder.add_text_field(
         "language", stored=True, tokenizer_name="raw", index_option="freq"
     )

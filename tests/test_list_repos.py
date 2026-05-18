@@ -1,10 +1,9 @@
-"""Tests for SearchIndex.list_paths() and _render_path_tree()."""
+"""Tests for SearchIndex.list_paths() and the --list-paths CLI output."""
 
 from pathlib import Path
 
 import pytest
 
-from tantivy_search.cli import _render_path_tree
 from tantivy_search.index import SearchIndex
 
 
@@ -33,52 +32,103 @@ def indexed_multi_path(tmp_path: Path, monkeypatch):
     return idx, dir_alpha, dir_beta
 
 
-def test_list_paths_collects_lcp(indexed_multi_path):
+def test_list_paths_returns_original_root(indexed_multi_path):
+    """list_paths() returns the exact root_path passed to index_repo, not a heuristic."""
     idx, dir_alpha, dir_beta = indexed_multi_path
     paths = idx.list_paths()
 
-    # Both partitions' LCPs should appear
     assert str(dir_alpha) in paths
     assert str(dir_beta) in paths
-
-    # Counts match the number of indexed chunks (2 files per dir, likely 1 chunk each)
     assert paths[str(dir_alpha)] > 0
     assert paths[str(dir_beta)] > 0
 
 
-def test_render_path_tree_format():
-    repos = {
-        "claudia": 4321,
-        "chinomatico-monorepo": 2506,
-        "chinomatico-monorepo/deps/foo": 6,
-        "chinomatico-monorepo/deps/bar": 12,
-        "conversation-history/old-laptop/2026-04-28": 512,
-        "conversation-history/old-laptop/2026-04-29": 347,
-    }
-    output = _render_path_tree(repos)
-    lines = output.splitlines()
+def test_list_paths_single_file_repo(tmp_path: Path, monkeypatch):
+    """A repo with one file still returns its root_path, not the file path."""
+    index_dir = tmp_path / "index"
+    version_file = index_dir / ".schema_version"
+    monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
+    monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
+    monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
 
-    # Header present
-    assert lines[0].startswith("Paths in index (6 roots,")
+    repo_dir = tmp_path / "solo-repo"
+    repo_dir.mkdir()
+    (repo_dir / "README.md").write_text("# Solo\n")
 
-    # Every input name appears somewhere in the output
-    for name in repos:
-        leaf = name.split("/")[-1]
-        assert any(leaf in line for line in lines), f"leaf {leaf!r} missing from output"
+    idx = SearchIndex()
+    idx.index_repo(str(repo_dir), "solo")
+    paths = idx.list_paths()
 
-    # Prefix nodes appear exactly once (lines ending with /)
-    prefix_lines = [line for line in lines if line.rstrip().endswith("/")]
-    prefix_texts = [line.strip() for line in prefix_lines]
-    assert prefix_texts.count("chinomatico-monorepo/") == 1
-    assert prefix_texts.count("deps/") == 1
-    assert prefix_texts.count("conversation-history/") == 1
-    assert prefix_texts.count("old-laptop/") == 1
+    assert str(repo_dir) in paths, f"Expected {repo_dir!s} in {paths}"
+    # The key must be the directory, not the file path
+    assert str(repo_dir / "README.md") not in paths
 
-    # claudia is at depth 0 — no leading spaces
-    claudia_line = next(line for line in lines if "claudia" in line and "/" not in line)
-    assert not claudia_line.startswith(" ")
 
-    # 2026-04-28 and 2026-04-29 are at depth 2 — 8 leading spaces (2 * 4)
-    for date in ("2026-04-28", "2026-04-29"):
-        date_line = next(line for line in lines if date in line)
-        assert date_line.startswith("        "), f"{date} not indented at depth 2"
+def test_list_paths_add_file_chunks_root(tmp_path: Path, monkeypatch):
+    """root_path is respected when add_file_chunks is called directly."""
+    from tantivy_search.chunking import Chunk
+
+    index_dir = tmp_path / "index"
+    version_file = index_dir / ".schema_version"
+    monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
+    monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
+    monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
+
+    idx = SearchIndex()
+    chunk = Chunk(
+        content="session data",
+        language="json",
+        heading_path="",
+        title="",
+        line_start=1,
+        line_end=1,
+        chunk_index=0,
+    )
+    root = "/home/tilo/.claude/projects"
+    idx.add_file_chunks(
+        "/home/tilo/.claude/projects/p1/session.jsonl", "sessions", root, [chunk]
+    )
+
+    paths = idx.list_paths()
+    assert root in paths
+    assert paths[root] == 1
+
+
+def test_list_paths_cli_flat_sorted(tmp_path: Path, monkeypatch, capsys):
+    """--list-paths prints one absolute path per line, sorted, no tree characters."""
+    import argparse
+
+    from tantivy_search.cli import cmd_list_paths
+
+    index_dir = tmp_path / "index"
+    version_file = index_dir / ".schema_version"
+    monkeypatch.setattr("tantivy_search.config.INDEX_DIR", index_dir)
+    monkeypatch.setattr("tantivy_search.config.SCHEMA_VERSION_FILE", version_file)
+    monkeypatch.setattr("tantivy_search.index.INDEX_DIR", index_dir)
+
+    dir_a = tmp_path / "aaa"
+    dir_a.mkdir()
+    (dir_a / "x.py").write_text("x = 1\n")
+    dir_b = tmp_path / "bbb"
+    dir_b.mkdir()
+    (dir_b / "y.py").write_text("y = 2\n")
+
+    idx = SearchIndex()
+    idx.index_repo(str(dir_a), "aaa")
+    idx.index_repo(str(dir_b), "bbb")
+
+    # Patch SearchIndex() inside cmd_list_paths to return our pre-built idx
+    monkeypatch.setattr("tantivy_search.cli.SearchIndex", lambda: idx)
+
+    cmd_list_paths(argparse.Namespace())
+    captured = capsys.readouterr().out
+    lines = [ln for ln in captured.splitlines() if ln.strip()]
+
+    # Must be sorted
+    assert lines == sorted(lines)
+    # No tree decoration characters
+    for line in lines:
+        assert not any(c in line for c in ("|", "├", "└", "─", "│"))
+    # Both paths present
+    assert any(str(dir_a) in line for line in lines)
+    assert any(str(dir_b) in line for line in lines)
