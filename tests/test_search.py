@@ -59,6 +59,12 @@ def test_parse_repo_filter_comma_separated():
     assert parsed.repo_filter == "a,b,c"
 
 
+def test_parse_file_filter_comma_separated():
+    parsed = parse_filters("hello file:a,b")
+    assert parsed.text == "hello"
+    assert parsed.file_filter == "a,b"
+
+
 def test_parse_multiple_filters():
     parsed = parse_filters("search lang:python repo:tools")
     assert parsed.text == "search"
@@ -463,3 +469,12 @@ def test_search_multi_repo_excludes_others(indexed_multi_repo):
     parsed = parse_filters("hello repo:repo-alpha,repo-beta")
     results = search(indexed_multi_repo, parsed, num_results=20)
     assert all(r.repo != "repo-gamma" for r in results)
+
+
+def test_search_multi_file_filter(indexed_repo):
+    # main.py and src/utils.py are distinct path substrings; README.md has neither
+    parsed = parse_filters("file:main.py,utils.py")
+    results = search(indexed_repo, parsed, num_results=50)
+    assert len(results) > 0
+    assert all("main.py" in r.file_path or "utils.py" in r.file_path for r in results)
+    assert all("README" not in r.file_path for r in results)
