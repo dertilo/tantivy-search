@@ -149,8 +149,16 @@ def parse_filters(raw_query: str) -> ParsedQuery:
 
 
 def _build_text_query(index: tantivy.Index, text: str, fuzzy: bool) -> tantivy.Query:
-    """Build hybrid exact (boosted) + fuzzy text query."""
-    exact_q = index.parse_query(
+    """Build hybrid exact (boosted) + fuzzy text query.
+
+    Uses ``parse_query_lenient`` so callers can pass free-form text containing
+    Lucene metacharacters (backticks, parens, unmatched quotes, stray colons)
+    without tripping a ``ValueError``. Fragments that don't parse become a
+    match-nothing subquery; the rest of the query still executes. We discard
+    the per-call error list — lenient parsing is best-effort and callers
+    cannot act on the errors meaningfully.
+    """
+    exact_q, _ = index.parse_query_lenient(
         text, default_field_names=SEARCH_FIELDS, field_boosts=FIELD_BOOSTS
     )
     boosted_exact = tantivy.Query.boost_query(exact_q, EXACT_BOOST)
@@ -158,7 +166,7 @@ def _build_text_query(index: tantivy.Index, text: str, fuzzy: bool) -> tantivy.Q
     if not fuzzy:
         return boosted_exact
 
-    fuzzy_q = index.parse_query(
+    fuzzy_q, _ = index.parse_query_lenient(
         text,
         default_field_names=SEARCH_FIELDS,
         field_boosts=FIELD_BOOSTS,

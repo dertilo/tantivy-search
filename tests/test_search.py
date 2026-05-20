@@ -268,6 +268,39 @@ def test_search_exclude_with_text(indexed_repo):
     assert all(r.language != "markdown" for r in results)
 
 
+# --- Lenient parsing: free-form text with Lucene metacharacters ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # backtick-quoted commit hash — the case that motivated lenient parsing
+        "Committed as `7981420` and pushed. hello world",
+        # bare parens, brackets, and Lucene operator tokens
+        "hello (world) [brackets] AND OR NOT",
+        # unmatched paren / quote
+        "unmatched (paren no close",
+        'unmatched "quote no close',
+        # stray colons that look like field syntax but aren't
+        "see http://example.com:8080 for hello",
+        "file:line.py hello",
+        # leading/trailing Lucene operators
+        "+hello -world ~tilde *star ?question !excl",
+    ],
+)
+def test_search_handles_lucene_metacharacters(indexed_repo, text):
+    """Free-form text with Lucene metacharacters must not raise.
+
+    Previously these queries hit ``parse_query`` (strict mode) and raised
+    ``ValueError: Syntax Error``. With ``parse_query_lenient`` they parse
+    on a best-effort basis — at worst returning no results, never crashing.
+    """
+    parsed = parse_filters(text)
+    # Must not raise; result list may be empty depending on what parsed cleanly.
+    results = search(indexed_repo, parsed, num_results=10)
+    assert isinstance(results, list)
+
+
 # --- Integration: --path filter ---
 
 
