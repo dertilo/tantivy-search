@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import time
+from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import tantivy
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from tantivy_search.chunking import Chunk
 
 from tantivy_search.config import (
@@ -23,6 +28,42 @@ from tantivy_search.schema import build_schema
 logger = logging.getLogger(__name__)
 
 WRITER_HEAP_SIZE = 50_000_000
+
+T = TypeVar("T")
+
+# tantivy-py raises a bare ``ValueError`` (no dedicated subclass) when a second
+# process/thread tries to open an ``IndexWriter`` while one is already held; the
+# message carries one of these markers. Match on the message so genuine
+# schema/type errors still propagate.
+_LOCK_MARKERS = ("LockBusy", "Failed to acquire Lockfile")
+
+
+def _is_lock_busy(e: BaseException) -> bool:
+    return isinstance(e, ValueError) and any(m in str(e) for m in _LOCK_MARKERS)
+
+
+def _retry_on_lock_busy(
+    fn: Callable[[], T], *, attempts: int = 8, base: float = 0.05, cap: float = 2.0
+) -> T:
+    """Run ``fn``, retrying only on writer-lock contention.
+
+    The index allows one ``IndexWriter`` at a time across the whole machine, so
+    when several processes write to the shared index (e.g. the watcher indexing
+    repos while claudia indexes conversations) an acquire can lose the race and
+    raise a lock-marker ``ValueError``. The critical section is milliseconds, so
+    jittered exponential backoff resolves the collision. ``fn`` must be safe to
+    re-run: acquisition fails before any document is written, so the whole
+    write block is retried from the top.
+    """
+    for i in range(attempts):
+        try:
+            return fn()
+        except ValueError as e:
+            if not _is_lock_busy(e) or i == attempts - 1:
+                raise
+            time.sleep(min(cap, base * 2**i) + random.uniform(0, base))
+    msg = "unreachable"  # loop either returns or raises
+    raise AssertionError(msg)
 
 # Directories to skip when walking
 SKIP_DIRS = {
@@ -119,6 +160,20 @@ class SearchIndex:
         )
         return searcher.search(q, limit=1, count=True).count > 0
 
+    @contextmanager
+    def _writer(self) -> Iterator[tantivy.IndexWriter]:
+        """Yield an ``IndexWriter``, retrying only the (contended) acquisition.
+
+        The lock-busy ``ValueError`` is raised by ``Index.writer()`` itself, so
+        retrying just the acquire — not the caller's write body — is enough and
+        avoids re-doing work. See :func:`_retry_on_lock_busy`.
+        """
+        writer = _retry_on_lock_busy(
+            lambda: self._index.writer(heap_size=WRITER_HEAP_SIZE, num_threads=1)
+        )
+        with writer as w:
+            yield w
+
     def delete_repo(self, repo_name: str) -> int:
         """Delete all docs for a repo. Returns approximate doc count before deletion."""
         searcher = self.searcher()
@@ -127,15 +182,13 @@ class SearchIndex:
         )
         count = searcher.search(q, limit=1, count=True).count
         if count > 0:
-            with self._index.writer(
-                heap_size=WRITER_HEAP_SIZE, num_threads=1
-            ) as writer:
+            with self._writer() as writer:
                 writer.delete_documents("repo", repo_name)
         return count
 
     def delete_file_chunks(self, file_path: str) -> None:
         """Delete all chunks for a single file."""
-        with self._index.writer(heap_size=WRITER_HEAP_SIZE, num_threads=1) as writer:
+        with self._writer() as writer:
             writer.delete_documents("file_path", file_path)
 
     def _write_chunks(
@@ -167,7 +220,7 @@ class SearchIndex:
         self, file_path: str, repo_name: str, root_path: str, chunks: list[Chunk]
     ) -> None:
         """Add documents for a single file."""
-        with self._index.writer(heap_size=WRITER_HEAP_SIZE, num_threads=1) as writer:
+        with self._writer() as writer:
             self._write_chunks(writer, file_path, repo_name, root_path, chunks)
 
     def index_repo(self, repo_path: str, repo_name: str) -> IndexStats:
@@ -182,7 +235,7 @@ class SearchIndex:
         file_paths = _collect_supported_files(Path(repo_path))
         stats.files_indexed = len(file_paths)
 
-        with self._index.writer(heap_size=WRITER_HEAP_SIZE, num_threads=1) as writer:
+        with self._writer() as writer:
             for fpath in file_paths:
                 try:
                     chunks = chunk_file(fpath)

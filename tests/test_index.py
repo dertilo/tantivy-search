@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from tantivy_search.index import SearchIndex, _collect_supported_files, MAX_FILE_SIZE
+from tantivy_search.index import (
+    MAX_FILE_SIZE,
+    SearchIndex,
+    _collect_supported_files,
+    _is_lock_busy,
+    _retry_on_lock_busy,
+)
 
 
 @pytest.fixture
@@ -126,3 +132,47 @@ def test_index_handles_unreadable_file(search_index, tmp_path: Path):
     # Should index at least the good file without crashing
     assert stats.files_indexed == 2  # both collected
     assert stats.chunks_total >= 1  # at least good.py chunked
+
+
+# --- Writer-lock retry ---
+
+
+def test_is_lock_busy_matches_only_lock_markers():
+    assert _is_lock_busy(ValueError("Failed to acquire Lockfile: LockBusy"))
+    assert _is_lock_busy(ValueError("LockBusy"))
+    assert not _is_lock_busy(ValueError("schema field type mismatch"))
+    assert not _is_lock_busy(RuntimeError("LockBusy"))  # only ValueError
+
+
+def test_retry_on_lock_busy_recovers_then_returns():
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ValueError("Failed to acquire Lockfile: LockBusy")
+        return "ok"
+
+    # base=0 keeps the test fast (no real backoff sleep)
+    assert _retry_on_lock_busy(flaky, base=0.0) == "ok"
+    assert calls["n"] == 3
+
+
+def test_retry_on_lock_busy_passes_through_other_valueerrors():
+    def boom():
+        raise ValueError("not a lock error")
+
+    with pytest.raises(ValueError, match="not a lock error"):
+        _retry_on_lock_busy(boom, base=0.0)
+
+
+def test_retry_on_lock_busy_gives_up_after_attempts():
+    calls = {"n": 0}
+
+    def always_busy():
+        calls["n"] += 1
+        raise ValueError("LockBusy")
+
+    with pytest.raises(ValueError, match="LockBusy"):
+        _retry_on_lock_busy(always_busy, attempts=4, base=0.0)
+    assert calls["n"] == 4
