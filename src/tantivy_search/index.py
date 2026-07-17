@@ -65,6 +65,7 @@ def _retry_on_lock_busy(
     msg = "unreachable"  # loop either returns or raises
     raise AssertionError(msg)
 
+
 # Directories to skip when walking
 SKIP_DIRS = {
     ".git",
