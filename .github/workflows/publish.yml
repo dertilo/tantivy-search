@@ -13,9 +13,17 @@ jobs:
       - run: uv sync
       - run: uv run pytest -v
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: uvx ruff check src/ tests/
+      - run: uvx ruff format --check src/ tests/
+
   publish:
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, lint]
     environment: pypi
     permissions:
       id-token: write
