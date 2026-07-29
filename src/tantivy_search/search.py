@@ -65,14 +65,16 @@ class SearchResult:
             timestamp=str(ts) if ts else "",
         )
 
-    def to_dict(self, snippet_mode: bool = False, index: int | None = None) -> dict:
+    def to_dict(
+        self, snippet_mode: bool = False, index: int | None = None
+    ) -> dict[str, str | int]:
         """Convert to dict, omitting empty optional fields.
 
         If snippet_mode is True and a snippet exists, replace content with
         the snippet for compact output.  If index is set, include it as the
         first field (for expand workflow).
         """
-        d: dict = {}
+        d: dict[str, str | int] = {}
         if index is not None:
             d["index"] = index
         raw = asdict(self)

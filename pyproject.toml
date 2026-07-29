@@ -1,6 +1,6 @@
 [project]
 name = "tantivy-search"
-version = "0.3.2"
+version = "0.3.3"
 description = "Local code and markdown search tool built on Tantivy"
 readme = "README.md"
 license = "MIT"
