@@ -1,7 +1,7 @@
 """Tests for query parsing, search execution, and result formatting."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,7 +14,6 @@ from tantivy_search.search import (
     parse_filters,
     search,
 )
-
 
 # --- parse_filters ---
 
@@ -63,30 +62,24 @@ def test_parse_multiple_excludes():
 def test_parse_time_value_relative_hours():
     dt = _parse_time_value("24h")
     assert dt is not None
-    assert (datetime.now(timezone.utc) - dt).total_seconds() == pytest.approx(
-        24 * 3600, abs=5
-    )
+    assert (datetime.now(UTC) - dt).total_seconds() == pytest.approx(24 * 3600, abs=5)
 
 
 def test_parse_time_value_relative_days():
     dt = _parse_time_value("7d")
     assert dt is not None
-    assert (datetime.now(timezone.utc) - dt).total_seconds() == pytest.approx(
-        7 * 86400, abs=5
-    )
+    assert (datetime.now(UTC) - dt).total_seconds() == pytest.approx(7 * 86400, abs=5)
 
 
 def test_parse_time_value_relative_weeks():
     dt = _parse_time_value("2w")
     assert dt is not None
-    assert (datetime.now(timezone.utc) - dt).total_seconds() == pytest.approx(
-        14 * 86400, abs=5
-    )
+    assert (datetime.now(UTC) - dt).total_seconds() == pytest.approx(14 * 86400, abs=5)
 
 
 def test_parse_time_value_absolute_date():
     dt = _parse_time_value("2026-03-14")
-    assert dt == datetime(2026, 3, 14, tzinfo=timezone.utc)
+    assert dt == datetime(2026, 3, 14, tzinfo=UTC)
 
 
 def test_parse_time_value_invalid():
@@ -103,14 +96,14 @@ def test_parse_after_filter():
 def test_parse_before_filter():
     parsed = parse_filters("docker before:2026-03-14")
     assert parsed.text == "docker"
-    assert parsed.before == datetime(2026, 3, 14, tzinfo=timezone.utc)
+    assert parsed.before == datetime(2026, 3, 14, tzinfo=UTC)
 
 
 def test_parse_after_and_before():
     parsed = parse_filters("config after:2026-03-01 before:2026-03-14")
     assert parsed.text == "config"
-    assert parsed.after == datetime(2026, 3, 1, tzinfo=timezone.utc)
-    assert parsed.before == datetime(2026, 3, 14, tzinfo=timezone.utc)
+    assert parsed.after == datetime(2026, 3, 1, tzinfo=UTC)
+    assert parsed.before == datetime(2026, 3, 14, tzinfo=UTC)
 
 
 # --- format_results (JSON) ---
@@ -350,9 +343,11 @@ def test_path_no_leading_slash_error():
 
     from tantivy_search.cli import main
 
-    with patch("sys.argv", ["tantivy-search", "query", "--path", "relative/path"]):
-        with pytest.raises(SystemExit) as exc_info:
-            main()
+    with (
+        patch("sys.argv", ["tantivy-search", "query", "--path", "relative/path"]),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
     assert exc_info.value.code != 0
 
 
@@ -414,7 +409,7 @@ def indexed_sessions(tmp_path: Path, monkeypatch):
         line_start=0,
         line_end=0,
         chunk_index=0,
-        timestamp=datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 3, 1, 10, 0, 0, tzinfo=UTC),
     )
     recent_chunk = Chunk(
         content="configuring docker containers for production",
@@ -424,7 +419,7 @@ def indexed_sessions(tmp_path: Path, monkeypatch):
         line_start=0,
         line_end=0,
         chunk_index=0,
-        timestamp=datetime(2026, 3, 14, 10, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 3, 14, 10, 0, 0, tzinfo=UTC),
     )
     no_ts_chunk = Chunk(
         content="some code without timestamp",
@@ -483,5 +478,5 @@ def test_search_result_includes_timestamp(indexed_sessions):
     parsed = parse_filters("docker")
     results = search(indexed_sessions, parsed, num_results=10)
     assert len(results) >= 1
-    docker_result = [r for r in results if "docker" in r.content][0]
+    docker_result = next(r for r in results if "docker" in r.content)
     assert docker_result.timestamp != ""

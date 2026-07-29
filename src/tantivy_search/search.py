@@ -1,7 +1,7 @@
 import json
 import re
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Self
 
 import tantivy
@@ -104,15 +104,15 @@ def _parse_time_value(value: str) -> datetime | None:
     m = _RELATIVE_RE.match(value)
     if m:
         amount, unit = int(m.group(1)), _TIME_UNITS[m.group(2)]
-        return datetime.now(timezone.utc) - timedelta(**{unit: amount})
+        return datetime.now(UTC) - timedelta(**{unit: amount})
     # Try absolute date (YYYY-MM-DD)
     try:
-        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
     except ValueError:
         pass
     # Try absolute datetime (YYYY-MM-DDTHH:MM:SS)
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except (ValueError, TypeError):
         return None
 

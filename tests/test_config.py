@@ -8,7 +8,6 @@ from tantivy_search.config import (
     write_schema_version,
 )
 
-
 # --- Schema versioning ---
 
 

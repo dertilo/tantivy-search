@@ -9,7 +9,6 @@ from tantivy_search.chunking import (
     chunk_file,
 )
 
-
 # --- Markdown chunking ---
 
 

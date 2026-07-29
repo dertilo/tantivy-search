@@ -240,7 +240,7 @@ class SearchIndex:
             for fpath in file_paths:
                 try:
                     chunks = chunk_file(fpath)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - any chunk failure must skip that file, not abort the whole index run
                     logger.warning("Failed to chunk %s: %s", fpath, e)
                     stats.errors.append(f"{fpath}: {e}")
                     continue
